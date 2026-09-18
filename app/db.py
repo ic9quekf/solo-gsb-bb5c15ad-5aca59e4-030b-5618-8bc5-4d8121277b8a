@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_sample ON events(sample_id);
+
+-- 审计结论签署：snapshot 为签署时刻的不可变 JSON 快照
+-- （样本信息 + 交接事件 + 审计结果），撤销仅改状态，快照原样保留。
+CREATE TABLE IF NOT EXISTS signoffs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id     INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
+    signer        TEXT    NOT NULL,
+    signed_at     TEXT    NOT NULL,
+    remark        TEXT    NOT NULL DEFAULT '',
+    snapshot      TEXT    NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'active',
+    revoked_at    TEXT,
+    revoke_reason TEXT,
+    created_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_signoffs_sample ON signoffs(sample_id);
 """
 
 

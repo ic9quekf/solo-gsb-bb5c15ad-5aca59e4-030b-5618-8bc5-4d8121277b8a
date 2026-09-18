@@ -15,6 +15,8 @@ STATUS_TEXT = {
     "empty": "无数据",
 }
 
+SIGNOFF_STATUS_TEXT = {"active": "已签署", "revoked": "已撤销"}
+
 FINDING_TEXT = {
     "gap": "保管断档",
     "overlap": "交接重叠",
@@ -24,7 +26,11 @@ FINDING_TEXT = {
 }
 
 
-def build_markdown(sample: dict[str, Any], audit: dict[str, Any]) -> str:
+def build_markdown(
+    sample: dict[str, Any],
+    audit: dict[str, Any],
+    signoffs: list[dict[str, Any]] | None = None,
+) -> str:
     s = audit["summary"]
     lines = [
         f"# 样本交接链路审计报告",
@@ -68,10 +74,38 @@ def build_markdown(sample: dict[str, Any], audit: dict[str, Any]) -> str:
         lines.append("")
     else:
         lines += ["_暂无交接事件。_", ""]
+
+    lines += _md_signoff_section(signoffs or [])
     return "\n".join(lines)
 
 
-def build_html(sample: dict[str, Any], audit: dict[str, Any]) -> str:
+def _md_signoff_section(signoffs: list[dict[str, Any]]) -> list[str]:
+    lines = ["## 结论签署", ""]
+    if not signoffs:
+        return lines + ["_尚未签署。_", ""]
+    lines += [
+        "| # | 签署人 | 签署时间 | 快照审计结论 | 状态 | 备注 | 撤销信息 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for i, so in enumerate(signoffs, 1):
+        snap_status = STATUS_TEXT.get(so.get("audit_status") or "", so.get("audit_status") or "—")
+        status = SIGNOFF_STATUS_TEXT.get(so["status"], so["status"])
+        revoke = "—"
+        if so["status"] == "revoked":
+            revoke = f"{so.get('revoked_at') or ''}：{so.get('revoke_reason') or ''}"
+        lines.append(
+            f"| {i} | {so['signer']} | {so['signed_at']} | {snap_status} | "
+            f"{status} | {so.get('remark') or '—'} | {revoke} |"
+        )
+    lines.append("")
+    return lines
+
+
+def build_html(
+    sample: dict[str, Any],
+    audit: dict[str, Any],
+    signoffs: list[dict[str, Any]] | None = None,
+) -> str:
     s = audit["summary"]
     status_class = {"pass": "ok", "warning": "warn", "fail": "bad", "empty": "muted"}.get(
         audit["status"], "muted"
@@ -99,6 +133,23 @@ def build_html(sample: dict[str, Any], audit: dict[str, Any]) -> str:
             f"<td>{html.escape(e['start_time'])}</td><td>{end}</td>"
             f"<td>{html.escape(e['duration'])}</td>"
             f"<td>{html.escape(e['note'] or '—')}</td></tr>"
+        )
+
+    signoff_rows = ""
+    for i, so in enumerate(signoffs or [], 1):
+        snap_status = STATUS_TEXT.get(so.get("audit_status") or "", so.get("audit_status") or "—")
+        st_cls = "ok" if so["status"] == "active" else "bad"
+        status = SIGNOFF_STATUS_TEXT.get(so["status"], so["status"])
+        revoke = "—"
+        if so["status"] == "revoked":
+            revoke = f"{so.get('revoked_at') or ''}：{so.get('revoke_reason') or ''}"
+        signoff_rows += (
+            f"<tr><td>{i}</td><td>{html.escape(so['signer'])}</td>"
+            f"<td>{html.escape(so['signed_at'])}</td>"
+            f"<td>{html.escape(snap_status)}</td>"
+            f"<td><span class='status {st_cls}'>{html.escape(status)}</span></td>"
+            f"<td>{html.escape(so.get('remark') or '—')}</td>"
+            f"<td>{html.escape(revoke)}</td></tr>"
         )
 
     return f"""<!DOCTYPE html>
@@ -166,18 +217,31 @@ def build_html(sample: dict[str, Any], audit: dict[str, Any]) -> str:
       {event_rows or '<tr><td colspan="7" class="muted">暂无交接事件。</td></tr>'}
     </table>
   </div>
+  <div class="card">
+    <h2>结论签署</h2>
+    <table>
+      <tr><th>#</th><th>签署人</th><th>签署时间</th><th>快照审计结论</th><th>状态</th>
+          <th>备注</th><th>撤销信息</th></tr>
+      {signoff_rows or '<tr><td colspan="7" class="muted">尚未签署。</td></tr>'}
+    </table>
+  </div>
 </body>
 </html>
 """
 
 
-def build_json(sample: dict[str, Any], audit: dict[str, Any]) -> str:
+def build_json(
+    sample: dict[str, Any],
+    audit: dict[str, Any],
+    signoffs: list[dict[str, Any]] | None = None,
+) -> str:
     return json.dumps(
         {
             "report": "样本交接链路审计报告",
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "sample": sample,
             "audit": audit,
+            "signoffs": signoffs or [],
         },
         ensure_ascii=False,
         indent=2,

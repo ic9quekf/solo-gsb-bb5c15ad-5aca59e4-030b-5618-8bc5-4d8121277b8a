@@ -14,6 +14,11 @@
 同时给出统计数字与**可读的中文审计结论**。支持编辑/删除事件，以及导出当前样本的
 **Markdown / HTML / JSON** 审计报告。
 
+审计完成后，审计员可在「结论签署」卡片对当前审计结果进行**签署**（签署人、签署时间、备注）：
+系统会保存一份包含**样本信息 + 交接事件 + 审计发现**的**不可变快照**，后续新增 / 修改 / 删除
+交接事件都不会改写历史快照。快照列表展示签署状态（已签署 / 已撤销）与审计摘要，可查看快照
+详情；**撤销签署**需填写原因，原快照始终保留。导出的审计报告会自动附上结论签署记录。
+
 ## 快速开始（Docker Compose，推荐）
 
 ```bash
@@ -68,7 +73,11 @@ pytest -q
    点击下方「审计发现」条目可高亮对应的时间条与表格行；
 4. 点击事件行的 **编辑** 可修改任意字段（录入序 seq 保持不变，便于追溯补录行为），
    保存后重新审计；也可删除事件；
-5. 通过右上角的 **导出审计报告** 下载 Markdown / HTML / JSON 三种格式之一。
+5. 审计结论确认无误后，在「结论签署」卡片填写签署人、签署时间（默认当前时间）与备注，
+   点击 **提交签署** 生成不可变快照；列表中可 **查看快照** 详情，或填写原因 **撤销** 签署
+   （快照保留、状态标记为已撤销，可再次签署）；
+6. 通过右上角的 **导出审计报告** 下载 Markdown / HTML / JSON 三种格式之一，
+   报告末尾附结论签署记录。
 
 演示样本 `SAM-DEMO-001` 预置了断档、重叠与逆序补录，`SAM-DEMO-002` 是无缝链路，
 开箱即可对比两种审计结果。
@@ -98,7 +107,11 @@ pytest -q
 | PUT | `/api/events/{id}` | 编辑交接事件 |
 | DELETE | `/api/events/{id}` | 删除交接事件 |
 | GET | `/api/samples/{id}/audit` | 仅获取审计结果 |
-| GET | `/api/samples/{id}/report?format=markdown\|html\|json` | 导出审计报告（带下载文件名） |
+| POST | `/api/samples/{id}/signoffs` | 提交结论签署，保存不可变快照（签署人必填，签署时间缺省为当前时间） |
+| GET | `/api/samples/{id}/signoffs` | 签署快照列表（状态 + 审计摘要） |
+| GET | `/api/signoffs/{id}` | 签署详情（含完整历史快照） |
+| POST | `/api/signoffs/{id}/revoke` | 撤销签署（需填写原因，快照保留；重复撤销返回 409） |
+| GET | `/api/samples/{id}/report?format=markdown\|html\|json` | 导出审计报告（带下载文件名，附结论签署记录） |
 
 交互式 API 文档：http://localhost:8080/docs
 
@@ -109,9 +122,9 @@ pytest -q
 ├── app/
 │   ├── main.py            # FastAPI 路由与静态文件挂载
 │   ├── audit.py           # 审计引擎：断档/重叠/逆序 + 时间线几何数据
-│   ├── db.py              # SQLite 连接、建表、演示数据
+│   ├── db.py              # SQLite 连接、建表（samples / events / signoffs）、演示数据
 │   ├── schemas.py         # Pydantic 请求模型与输入校验
-│   ├── report.py          # Markdown / HTML / JSON 报告生成
+│   ├── report.py          # Markdown / HTML / JSON 报告生成（含结论签署记录）
 │   └── static/
 │       ├── index.html     # 单页界面
 │       ├── styles.css
@@ -129,5 +142,7 @@ pytest -q
 
 - 时间存储为 SQLite 文本 `YYYY-MM-DD HH:MM:SS`，应用层统一解析为 naive datetime 比较；
 - `events.seq` 为不可变的录入顺序（自增），审计排序按 `start_time`，二者不一致即为逆序录入；
+- `signoffs.snapshot` 为签署时刻的 JSON 快照（样本 + 事件 + 审计结果），落库后不再修改；
+  撤销仅更新 `status / revoked_at / revoke_reason` 字段，快照原文保留；
 - 无外部前端构建步骤，静态资源由 FastAPI 的 `StaticFiles` 直接提供；
 - 服务进程在容器内以非 root 友好的方式运行于固定端口 **8080**，数据与镜像分离。

@@ -67,6 +67,7 @@
     gap: "断档", overlap: "重叠", reversed_interval: "起止倒置",
     out_of_order: "逆序录入", bad_time: "时间错误",
   };
+  const SIGNOFF_STATUS_LABEL = { active: "已签署", revoked: "已撤销" };
 
   // ---------- 样本列表 ----------
 
@@ -125,9 +126,11 @@
   function renderAll() {
     renderSample();
     renderAudit();
+    renderSignoffs();
     renderTimeline();
     renderEvents();
     resetForm();
+    resetSignoffForm();
   }
 
   function renderSample() {
@@ -272,6 +275,197 @@
         setTimeout(() => (el.style.outline = ""), 1800);
       });
     });
+  });
+
+  // ---------- 结论签署 ----------
+
+  function renderSignoffs() {
+    const signoffs = state.data.signoffs || [];
+    const active = signoffs.find((s) => s.status === "active");
+
+    const badge = $("#signoff-status");
+    if (active) {
+      badge.textContent = `已签署 · ${active.signer}`;
+      badge.className = "badge badge-pass";
+    } else if (signoffs.length) {
+      badge.textContent = "最近签署已撤销";
+      badge.className = "badge badge-warning";
+    } else {
+      badge.textContent = "未签署";
+      badge.className = "badge badge-empty";
+    }
+
+    const tbody = $("#signoff-tbody");
+    if (!signoffs.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="muted-cell" style="text-align:center;padding:18px">暂无签署记录，提交签署后将生成不可变快照</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = signoffs
+      .map((so, idx) => {
+        const stCls = so.status === "active" ? "signoff-active" : "signoff-revoked";
+        const snapLabel = STATUS_LABEL[so.audit_status] || so.audit_status || "—";
+        const revokeInfo =
+          so.status === "revoked"
+            ? `<div class="muted-cell">撤销于 ${esc(so.revoked_at || "")}<br>${esc(so.revoke_reason || "")}</div>`
+            : "";
+        return `
+        <tr class="${so.status === "revoked" ? "row-revoked" : ""}">
+          <td class="col-ord">${signoffs.length - idx}</td>
+          <td>${esc(so.signer)}</td>
+          <td>${esc(so.signed_at)}</td>
+          <td><span class="badge badge-${esc(so.audit_status || "empty")}">${esc(snapLabel)}</span>
+            <div class="muted-cell">${so.event_count} 条事件 · ${so.findings_count} 项发现</div></td>
+          <td><span class="signoff-tag ${stCls}">${SIGNOFF_STATUS_LABEL[so.status] || so.status}</span>${revokeInfo}</td>
+          <td>${esc(so.remark || "—")}</td>
+          <td>
+            <button class="link-btn btn-edit" data-so="view" data-id="${so.id}">查看快照</button>
+            ${so.status === "active" ? `<button class="link-btn btn-del" data-so="revoke" data-id="${so.id}">撤销</button>` : ""}
+          </td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  // 提交签署：默认签署时间为当前时间
+  function resetSignoffForm() {
+    $("#signoff-form").reset();
+    const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+    $("#so-signed-at").value = now.toISOString().slice(0, 19);
+  }
+
+  $("#signoff-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {
+      signer: $("#so-signer").value.trim(),
+      signed_at: $("#so-signed-at").value || null,
+      remark: $("#so-remark").value.trim(),
+    };
+    if (!payload.signer) {
+      toast("请填写签署人", true);
+      return;
+    }
+    try {
+      await api(`/api/samples/${state.currentId}/signoffs`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      toast("签署已提交，快照已保存");
+      await refresh();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+
+  // 快照详情 / 撤销
+  const signoffModal = $("#signoff-modal");
+  const revokeModal = $("#revoke-modal");
+  let revokingId = null;
+
+  $("#signoff-tbody").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-so]");
+    if (!btn) return;
+    const id = Number(btn.dataset.id);
+
+    if (btn.dataset.so === "view") {
+      try {
+        const detail = await api(`/api/signoffs/${id}`);
+        renderSignoffDetail(detail);
+        signoffModal.hidden = false;
+      } catch (err) {
+        toast(err.message, true);
+      }
+      return;
+    }
+
+    if (btn.dataset.so === "revoke") {
+      revokingId = id;
+      $("#revoke-form").reset();
+      revokeModal.hidden = false;
+      $("#revoke-reason").focus();
+    }
+  });
+
+  function renderSignoffDetail(d) {
+    const snap = d.snapshot || {};
+    const sample = snap.sample || {};
+    const audit = snap.audit || {};
+    const events = (audit.events || []);
+    const summary = audit.summary || {};
+    const revoked =
+      d.status === "revoked"
+        ? `<div class="revoke-banner">已于 ${esc(d.revoked_at || "")} 撤销：${esc(d.revoke_reason || "")}</div>`
+        : "";
+    const findings = (audit.findings || [])
+      .map(
+        (f) => `<li class="finding-${esc(f.code)}">
+          <span class="tag">${FINDING_LABEL[f.code] || esc(f.code)}</span><span>${esc(f.message)}</span>
+        </li>`
+      )
+      .join("");
+    const rows = events
+      .map(
+        (ev, i) => `<tr class="${ev.has_conflict ? "row-conflict" : ""}">
+          <td class="col-ord">${i + 1}</td><td class="col-seq">${ev.seq}</td>
+          <td>${esc(ev.custodian)}</td><td>${esc(ev.start_time)}</td>
+          <td>${ev.open ? '<span class="open-tag">仍在保管</span>' : esc(ev.end_time)}</td>
+          <td>${esc(ev.duration)}</td><td>${esc(ev.note || "—")}</td>
+        </tr>`
+      )
+      .join("");
+
+    $("#signoff-detail").innerHTML = `
+      ${revoked}
+      <div class="signoff-meta">
+        <span class="signoff-tag ${d.status === "active" ? "signoff-active" : "signoff-revoked"}">${SIGNOFF_STATUS_LABEL[d.status] || d.status}</span>
+        <span>签署人：<b>${esc(d.signer)}</b></span>
+        <span>签署时间：${esc(d.signed_at)}</span>
+        <span>备注：${esc(d.remark || "—")}</span>
+      </div>
+      <div class="signoff-meta">
+        <span>样本：<b>${esc(sample.code || "")}</b> ${esc(sample.name || "")}</span>
+        <span>快照事件数：${summary.total ?? events.length}</span>
+        <span>断档 ${summary.gaps ?? 0} · 重叠 ${summary.overlaps ?? 0} · 逆序 ${summary.out_of_order ?? 0}</span>
+      </div>
+      <p class="conclusion"><span class="badge badge-${esc(audit.status || "empty")}">${STATUS_LABEL[audit.status] || "—"}</span>
+        ${esc(audit.conclusion || "")}</p>
+      ${findings ? `<ul class="findings">${findings}</ul>` : '<p class="muted-cell">✓ 快照时未发现断档、重叠或逆序问题。</p>'}
+      <div class="table-wrap">
+        <table class="event-table">
+          <thead><tr><th>排序#</th><th>录入序</th><th>经手人</th><th>起始时间</th><th>结束时间</th><th>时长</th><th>备注</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="7" class="muted-cell" style="text-align:center">快照中无交接事件</td></tr>'}</tbody>
+        </table>
+      </div>
+      <p class="muted-cell" style="margin-top:10px">该快照为签署时刻的不可变记录，后续事件变更不影响此内容。</p>`;
+  }
+
+  $("#btn-close-signoff").addEventListener("click", () => (signoffModal.hidden = true));
+  signoffModal.addEventListener("click", (e) => {
+    if (e.target === signoffModal) signoffModal.hidden = true;
+  });
+
+  $("#btn-cancel-revoke").addEventListener("click", () => (revokeModal.hidden = true));
+  revokeModal.addEventListener("click", (e) => {
+    if (e.target === revokeModal) revokeModal.hidden = true;
+  });
+
+  $("#revoke-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const reason = $("#revoke-reason").value.trim();
+    if (!reason) {
+      toast("请填写撤销原因", true);
+      return;
+    }
+    try {
+      await api(`/api/signoffs/${revokingId}/revoke`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      revokeModal.hidden = true;
+      toast("签署已撤销，快照已保留");
+      await refresh();
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 
   // ---------- 事件增 / 改 / 删 ----------
