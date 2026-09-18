@@ -61,6 +61,22 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_sample ON events(sample_id);
+
+CREATE TABLE IF NOT EXISTS signoffs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    sample_id     INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
+    signer        TEXT    NOT NULL,
+    signed_at     TEXT    NOT NULL,
+    remark        TEXT    NOT NULL DEFAULT '',
+    status        TEXT    NOT NULL DEFAULT 'active',
+    revoke_reason TEXT,
+    revoked_at    TEXT,
+    snapshot      TEXT    NOT NULL,
+    digest        TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_signoffs_sample ON signoffs(sample_id);
 """
 
 

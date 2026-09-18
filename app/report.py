@@ -23,8 +23,22 @@ FINDING_TEXT = {
     "bad_time": "时间格式错误",
 }
 
+SIGNOFF_STATUS_TEXT = {
+    "active": "已签署",
+    "revoked": "已撤销",
+}
 
-def build_markdown(sample: dict[str, Any], audit: dict[str, Any]) -> str:
+
+def _md_cell(text: Any) -> str:
+    """转义 Markdown 表格单元格中的竖线。"""
+    return str(text if text not in (None, "") else "—").replace("|", "\\|")
+
+
+def build_markdown(
+    sample: dict[str, Any],
+    audit: dict[str, Any],
+    signoffs: list[dict[str, Any]] | None = None,
+) -> str:
     s = audit["summary"]
     lines = [
         f"# 样本交接链路审计报告",
@@ -68,10 +82,39 @@ def build_markdown(sample: dict[str, Any], audit: dict[str, Any]) -> str:
         lines.append("")
     else:
         lines += ["_暂无交接事件。_", ""]
+
+    lines += _signoff_markdown(signoffs)
     return "\n".join(lines)
 
 
-def build_html(sample: dict[str, Any], audit: dict[str, Any]) -> str:
+def _signoff_markdown(signoffs: list[dict[str, Any]] | None) -> list[str]:
+    lines = ["## 结论签署", ""]
+    if not signoffs:
+        return lines + ["_尚未有任何签署记录。_", ""]
+    lines += [
+        "| 签署人 | 签署时间 | 状态 | 签署时审计结论 | 快照校验值 | 备注 | 撤销信息 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for s in signoffs:
+        status = SIGNOFF_STATUS_TEXT.get(s["status"], s["status"])
+        audit_txt = STATUS_TEXT.get(s.get("audit_status") or "", s.get("audit_status") or "—")
+        revoke = "—"
+        if s["status"] == "revoked":
+            revoke = f"{s.get('revoked_at') or ''} {s.get('revoke_reason') or ''}".strip()
+        lines.append(
+            f"| {_md_cell(s['signer'])} | {_md_cell(s['signed_at'])} | {status} | "
+            f"{audit_txt} | {_md_cell(s.get('digest'))} | {_md_cell(s.get('remark'))} | "
+            f"{_md_cell(revoke)} |"
+        )
+    lines.append("")
+    return lines
+
+
+def build_html(
+    sample: dict[str, Any],
+    audit: dict[str, Any],
+    signoffs: list[dict[str, Any]] | None = None,
+) -> str:
     s = audit["summary"]
     status_class = {"pass": "ok", "warning": "warn", "fail": "bad", "empty": "muted"}.get(
         audit["status"], "muted"
@@ -100,6 +143,28 @@ def build_html(sample: dict[str, Any], audit: dict[str, Any]) -> str:
             f"<td>{html.escape(e['duration'])}</td>"
             f"<td>{html.escape(e['note'] or '—')}</td></tr>"
         )
+
+    signoff_rows = ""
+    for so in signoffs or []:
+        st_cls = "ok" if so["status"] == "active" else "bad"
+        st_txt = SIGNOFF_STATUS_TEXT.get(so["status"], so["status"])
+        audit_txt = STATUS_TEXT.get(so.get("audit_status") or "", so.get("audit_status") or "—")
+        revoke = "—"
+        if so["status"] == "revoked":
+            revoke = html.escape(
+                f"{so.get('revoked_at') or ''} {so.get('revoke_reason') or ''}".strip()
+            )
+        signoff_rows += (
+            f"<tr><td>{html.escape(so['signer'])}</td>"
+            f"<td>{html.escape(so['signed_at'])}</td>"
+            f"<td><span class='status {st_cls}'>{st_txt}</span></td>"
+            f"<td>{html.escape(audit_txt)}</td>"
+            f"<td><code>{html.escape(so.get('digest') or '')}</code></td>"
+            f"<td>{html.escape(so.get('remark') or '—')}</td>"
+            f"<td>{revoke}</td></tr>"
+        )
+    if not signoff_rows:
+        signoff_rows = "<tr><td colspan='7' class='muted'>尚未有任何签署记录。</td></tr>"
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -166,18 +231,31 @@ def build_html(sample: dict[str, Any], audit: dict[str, Any]) -> str:
       {event_rows or '<tr><td colspan="7" class="muted">暂无交接事件。</td></tr>'}
     </table>
   </div>
+  <div class="card">
+    <h2>结论签署</h2>
+    <table>
+      <tr><th>签署人</th><th>签署时间</th><th>状态</th><th>签署时审计结论</th>
+          <th>快照校验值</th><th>备注</th><th>撤销信息</th></tr>
+      {signoff_rows}
+    </table>
+  </div>
 </body>
 </html>
 """
 
 
-def build_json(sample: dict[str, Any], audit: dict[str, Any]) -> str:
+def build_json(
+    sample: dict[str, Any],
+    audit: dict[str, Any],
+    signoffs: list[dict[str, Any]] | None = None,
+) -> str:
     return json.dumps(
         {
             "report": "样本交接链路审计报告",
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "sample": sample,
             "audit": audit,
+            "signoffs": signoffs or [],
         },
         ensure_ascii=False,
         indent=2,

@@ -14,6 +14,11 @@
 同时给出统计数字与**可读的中文审计结论**。支持编辑/删除事件，以及导出当前样本的
 **Markdown / HTML / JSON** 审计报告。
 
+审计完成后，审计员可对当前结论执行**结论签署**：填写签署人、签署时间与备注后，
+系统保存一份包含样本信息、交接事件与审计发现的**不可变快照**（附 SHA-256 校验值）。
+此后事件的任何增删改都不会改写历史快照；快照支持列表查看、详情核对与**撤销签署**
+（撤销必须填写原因，原快照保留，仅标记状态）。导出的审计报告会自动附上签署记录。
+
 ## 快速开始（Docker Compose，推荐）
 
 ```bash
@@ -68,7 +73,11 @@ pytest -q
    点击下方「审计发现」条目可高亮对应的时间条与表格行；
 4. 点击事件行的 **编辑** 可修改任意字段（录入序 seq 保持不变，便于追溯补录行为），
    保存后重新审计；也可删除事件；
-5. 通过右上角的 **导出审计报告** 下载 Markdown / HTML / JSON 三种格式之一。
+5. 在「结论签署」卡片填写签署人、签署时间（默认当前时间）与备注，点击
+   **签署当前审计结论** 生成不可变快照；列表中点击 **详情 / 撤销** 可查看快照完整内容
+   （含完整性校验），有效签署可在详情弹窗中填写原因后撤销，撤销后原快照保留；
+6. 通过「交接事件」卡片右上角的 **导出审计报告** 下载 Markdown / HTML / JSON 三种格式之一，
+   报告末尾自动附上全部签署记录（含状态与撤销原因）。
 
 演示样本 `SAM-DEMO-001` 预置了断档、重叠与逆序补录，`SAM-DEMO-002` 是无缝链路，
 开箱即可对比两种审计结果。
@@ -92,13 +101,17 @@ pytest -q
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/samples` | 样本列表（含事件数） |
 | POST | `/api/samples` | 新建样本 |
-| GET | `/api/samples/{id}` | 样本详情 + 事件 + 审计结果 |
-| DELETE | `/api/samples/{id}` | 删除样本（级联删除事件） |
+| GET | `/api/samples/{id}` | 样本详情 + 事件 + 审计结果 + 签署快照摘要 |
+| DELETE | `/api/samples/{id}` | 删除样本（级联删除事件与签署快照） |
 | POST | `/api/samples/{id}/events` | 登记交接事件（自动分配录入序） |
 | PUT | `/api/events/{id}` | 编辑交接事件 |
 | DELETE | `/api/events/{id}` | 删除交接事件 |
 | GET | `/api/samples/{id}/audit` | 仅获取审计结果 |
-| GET | `/api/samples/{id}/report?format=markdown\|html\|json` | 导出审计报告（带下载文件名） |
+| POST | `/api/samples/{id}/signoffs` | 结论签署：保存当前审计结果的不可变快照 |
+| GET | `/api/samples/{id}/signoffs` | 签署快照列表（状态 + 审计摘要） |
+| GET | `/api/signoffs/{id}` | 快照详情（完整快照 + 完整性校验） |
+| POST | `/api/signoffs/{id}/revoke` | 撤销签署（需原因，原快照保留） |
+| GET | `/api/samples/{id}/report?format=markdown\|html\|json` | 导出审计报告（带下载文件名，含签署记录） |
 
 交互式 API 文档：http://localhost:8080/docs
 
@@ -129,5 +142,7 @@ pytest -q
 
 - 时间存储为 SQLite 文本 `YYYY-MM-DD HH:MM:SS`，应用层统一解析为 naive datetime 比较；
 - `events.seq` 为不可变的录入顺序（自增），审计排序按 `start_time`，二者不一致即为逆序录入；
+- 签署快照以 JSON 文本整体存入 `signoffs.snapshot`，并记录 SHA-256 校验值；
+  撤销仅更新 `status / revoke_reason / revoked_at`，快照内容从创建起无任何接口可修改；
 - 无外部前端构建步骤，静态资源由 FastAPI 的 `StaticFiles` 直接提供；
 - 服务进程在容器内以非 root 友好的方式运行于固定端口 **8080**，数据与镜像分离。

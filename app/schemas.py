@@ -69,3 +69,41 @@ class EventCreate(BaseModel):
         if self.end_time and self.end_time < self.start_time:
             raise ValueError("结束时间不能早于起始时间（逆序问题将在审计中标注，请先修正数据）")
         return self
+
+
+class SignoffCreate(BaseModel):
+    """结论签署：在当前审计结果上生成不可变快照。"""
+
+    signer: str = Field(..., min_length=1, max_length=64)
+    signed_at: str
+    remark: str = Field("", max_length=512)
+
+    @field_validator("signer")
+    @classmethod
+    def _strip_signer(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("签署人不能为空")
+        return v
+
+    @field_validator("signed_at")
+    @classmethod
+    def _norm_signed_at(cls, v: str) -> str:
+        normalized = _normalize_time(v, "签署时间")
+        if normalized is None:
+            raise ValueError("签署时间不能为空")
+        return normalized
+
+
+class SignoffRevoke(BaseModel):
+    """撤销签署：必须填写原因，原快照保留。"""
+
+    reason: str = Field(..., min_length=1, max_length=512)
+
+    @field_validator("reason")
+    @classmethod
+    def _strip_reason(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("撤销原因不能为空")
+        return v

@@ -1,6 +1,8 @@
-"""FastAPI 入口：样本 / 交接事件 CRUD、审计与报告导出。"""
+"""FastAPI 入口：样本 / 交接事件 CRUD、审计、结论签署与报告导出。"""
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 from contextlib import asynccontextmanager
@@ -15,7 +17,7 @@ from sqlite3 import Connection
 from .audit import build_audit
 from .db import get_conn, init_db
 from .report import build_html, build_json, build_markdown
-from .schemas import EventCreate, SampleCreate
+from .schemas import EventCreate, SampleCreate, SignoffCreate, SignoffRevoke
 
 
 @asynccontextmanager
@@ -104,7 +106,12 @@ def get_sample(sample_id: int, conn: Connection = Depends(get_conn)) -> dict[str
     sample = _fetch_sample(conn, sample_id)
     events = _fetch_events(conn, sample_id)
     audit = build_audit(events)
-    return {"sample": sample, "events": events, "audit": audit}
+    return {
+        "sample": sample,
+        "events": events,
+        "audit": audit,
+        "signoffs": _list_signoffs(conn, sample_id),
+    }
 
 
 @app.delete("/api/samples/{sample_id}", status_code=204)
@@ -166,6 +173,101 @@ def get_audit(sample_id: int, conn: Connection = Depends(get_conn)) -> dict[str,
     return build_audit(_fetch_events(conn, sample_id))
 
 
+# ---------- 结论签署（不可变快照） ----------
+
+def _signoff_summary(row: Any) -> dict[str, Any]:
+    """签署记录的列表/摘要视图：状态 + 从快照中提取的审计摘要。"""
+    snap = json.loads(row["snapshot"])
+    audit = snap.get("audit", {})
+    return {
+        "id": row["id"],
+        "sample_id": row["sample_id"],
+        "signer": row["signer"],
+        "signed_at": row["signed_at"],
+        "remark": row["remark"],
+        "status": row["status"],
+        "revoke_reason": row["revoke_reason"],
+        "revoked_at": row["revoked_at"],
+        "created_at": row["created_at"],
+        "digest": row["digest"][:12],
+        "audit_status": audit.get("status"),
+        "conclusion": audit.get("conclusion"),
+        "summary": audit.get("summary"),
+        "event_count": len(snap.get("events", [])),
+    }
+
+
+def _list_signoffs(conn: Connection, sample_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM signoffs WHERE sample_id = ? ORDER BY id DESC", (sample_id,)
+    ).fetchall()
+    return [_signoff_summary(r) for r in rows]
+
+
+def _fetch_signoff(conn: Connection, signoff_id: int) -> Any:
+    row = conn.execute("SELECT * FROM signoffs WHERE id = ?", (signoff_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="签署记录不存在")
+    return row
+
+
+@app.post("/api/samples/{sample_id}/signoffs", status_code=201)
+def create_signoff(
+    sample_id: int, payload: SignoffCreate, conn: Connection = Depends(get_conn)
+) -> dict[str, Any]:
+    """在当前审计结果上签署：保存样本 + 事件 + 审计发现的不可变快照。"""
+    sample = _fetch_sample(conn, sample_id)
+    events = _fetch_events(conn, sample_id)
+    audit = build_audit(events)
+    snapshot = {"sample": sample, "events": events, "audit": audit}
+    raw = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cur = conn.execute(
+        "INSERT INTO signoffs (sample_id, signer, signed_at, remark, status, "
+        "snapshot, digest, created_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
+        (sample_id, payload.signer, payload.signed_at, payload.remark, raw, digest, now),
+    )
+    conn.commit()
+    return _signoff_summary(_fetch_signoff(conn, cur.lastrowid))
+
+
+@app.get("/api/samples/{sample_id}/signoffs")
+def list_signoffs(sample_id: int, conn: Connection = Depends(get_conn)) -> list[dict[str, Any]]:
+    _fetch_sample(conn, sample_id)
+    return _list_signoffs(conn, sample_id)
+
+
+@app.get("/api/signoffs/{signoff_id}")
+def get_signoff(signoff_id: int, conn: Connection = Depends(get_conn)) -> dict[str, Any]:
+    """快照详情：返回完整快照内容并现场校验完整性。"""
+    row = _fetch_signoff(conn, signoff_id)
+    detail = _signoff_summary(row)
+    detail["digest"] = row["digest"]
+    detail["snapshot"] = json.loads(row["snapshot"])
+    detail["integrity_ok"] = (
+        hashlib.sha256(row["snapshot"].encode("utf-8")).hexdigest() == row["digest"]
+    )
+    return detail
+
+
+@app.post("/api/signoffs/{signoff_id}/revoke")
+def revoke_signoff(
+    signoff_id: int, payload: SignoffRevoke, conn: Connection = Depends(get_conn)
+) -> dict[str, Any]:
+    """撤销签署：记录原因与时间，原快照保留不变。"""
+    row = _fetch_signoff(conn, signoff_id)
+    if row["status"] == "revoked":
+        raise HTTPException(status_code=409, detail="该签署已撤销，请勿重复操作")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute(
+        "UPDATE signoffs SET status = 'revoked', revoke_reason = ?, revoked_at = ? WHERE id = ?",
+        (payload.reason, now, signoff_id),
+    )
+    conn.commit()
+    return _signoff_summary(_fetch_signoff(conn, signoff_id))
+
+
 # ---------- 报告导出 ----------
 
 def _safe_filename(code: str, ext: str) -> str:
@@ -181,17 +283,18 @@ def export_report(
 ):
     sample = _fetch_sample(conn, sample_id)
     audit = build_audit(_fetch_events(conn, sample_id))
+    signoffs = _list_signoffs(conn, sample_id)
 
     if format == "markdown":
-        body = build_markdown(sample, audit)
+        body = build_markdown(sample, audit, signoffs)
         headers = {"Content-Disposition": f'attachment; filename="{_safe_filename(sample["code"], "md")}"'}
         return PlainTextResponse(content=body, media_type="text/markdown; charset=utf-8", headers=headers)
     if format == "html":
-        body = build_html(sample, audit)
+        body = build_html(sample, audit, signoffs)
         headers = {"Content-Disposition": f'attachment; filename="{_safe_filename(sample["code"], "html")}"'}
         return HTMLResponse(content=body, media_type="text/html; charset=utf-8", headers=headers)
 
-    body = build_json(sample, audit)
+    body = build_json(sample, audit, signoffs)
     headers = {"Content-Disposition": f'attachment; filename="{_safe_filename(sample["code"], "json")}"'}
     return Response(content=body, media_type="application/json; charset=utf-8", headers=headers)
 

@@ -233,6 +233,7 @@ body {
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
+.form-grid-3 { grid-template-columns: repeat(3, 1fr); }
 .event-form label, .modal label {
   display: flex; flex-direction: column; gap: 4px;
   font-size: 12.5px; font-weight: 600; color: #475569;
@@ -326,6 +327,44 @@ input:focus, textarea:focus {
 
 .report-actions { display: flex; align-items: center; gap: 6px; }
 .export-label { font-size: 12px; color: var(--muted); margin-right: 2px; }
+
+/* ---------- 结论签署 ---------- */
+.head-hint { font-size: 12px; color: var(--muted); }
+.digest {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; background: #f1f5f9; border-radius: 4px; padding: 1px 6px;
+}
+.modal-wide { width: 780px; max-height: 88vh; overflow-y: auto; }
+.signoff-detail { font-size: 13.5px; }
+.signoff-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px;
+  background: #f8fafc; border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;
+}
+.signoff-meta .meta-lbl {
+  display: inline-block; min-width: 76px;
+  color: var(--muted); font-size: 12px; margin-right: 6px;
+}
+.signoff-section { margin-bottom: 16px; }
+.signoff-section h4 { margin: 0 0 8px; font-size: 13.5px; color: #475569; }
+.integrity-ok { color: var(--ok-text); font-size: 12px; font-weight: 600; }
+.integrity-bad { color: var(--bad-text); font-size: 12px; font-weight: 600; }
+.revoke-zone {
+  display: flex; gap: 10px; align-items: flex-end;
+  border-top: 1px dashed var(--border); padding-top: 14px; margin-top: 4px;
+}
+.revoke-zone label {
+  flex: 1; display: flex; flex-direction: column; gap: 4px;
+  font-size: 12.5px; font-weight: 600; color: #475569;
+}
+.revoked-info {
+  border-top: 1px dashed var(--border); padding-top: 14px; margin-top: 4px;
+  color: var(--warn-text); font-size: 13px;
+}
+.btn-danger-solid {
+  background: var(--danger); border-color: var(--danger); color: #fff;
+}
+.btn-danger-solid:hover { background: #b91c1c; }
 
 @media (max-width: 900px) {
   .layout { flex-direction: column; }
